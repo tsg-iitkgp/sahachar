@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { 
   BookOpen, CheckCircle, LogOut, ArrowLeft, 
   ChevronDown, ChevronRight, PlayCircle, FileText, Award, AlertCircle
 } from 'lucide-react';
 import CoursePlayer from './CoursePlayer';
+import { resumeModule } from './services/courseNavigation';
 import { 
   fetchCourseData, fetchUserProgress, updateUserProgressApi, 
   fetchCourseNote, saveCourseNote, submitQuery
@@ -14,6 +15,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
   const navigate = useNavigate();
   const location = useLocation();
   const basePath = isPreviewMode ? '/admin' : '/dashboard';
+  const restoreCourseRoute = useRef(location.pathname.includes('/course'));
 
   const currentView = location.pathname.includes('/course-completed') ? 'course-completed'
                     : location.pathname.includes('/course') ? 'course'
@@ -23,6 +25,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
   const [activeModule, setActiveModule] = useState(null);
   const [expandedModules, setExpandedModules] = useState({ 1: true });
   const [isNotesOpen, setIsNotesOpen] = useState(false);
+  const [isCourseNavigationOpen, setIsCourseNavigationOpen] = useState(false);
   
   const [courseData, setCourseData] = useState(null);
   const [progress, setProgress] = useState({});
@@ -30,6 +33,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
   // Notes & Queries State
   const [notesText, setNotesText] = useState('');
   const [isSavingNote, setIsSavingNote] = useState(false);
+  const [noteSaveStatus, setNoteSaveStatus] = useState('');
   const [queryText, setQueryText] = useState('');
   const [isSubmittingQuery, setIsSubmittingQuery] = useState(false);
   const [courseMainView, setCourseMainView] = useState('player'); // 'player', 'notes', 'queries'
@@ -50,28 +54,37 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
         };
       }
 
-      if (user?.id) {
+      let loadedProgress = initialProgress;
+      if (user?.id && !isPreviewMode) {
         const userProg = await fetchUserProgress(user.id, course.id || 'c1');
-        setProgress({ ...initialProgress, ...userProg });
+        loadedProgress = { ...initialProgress, ...userProg };
         
         const note = await fetchCourseNote(user.id, course.id || 'c1');
         setNotesText(note);
-      } else {
-        setProgress(initialProgress);
+      }
+      setProgress(loadedProgress);
+      if (restoreCourseRoute.current) {
+        const modNum = resumeModule(course, loadedProgress);
+        setSelectedCourse(course);
+        setActiveModule({ courseId: course.id, modNum, modKey: `${course.id}-m${modNum}` });
+        setExpandedModules({ [modNum]: true });
+        restoreCourseRoute.current = false;
       }
     }
     loadData();
-  }, [user]);
+  }, [user, isPreviewMode]);
 
   const handleSaveNote = async () => {
-    if (!user?.id || !selectedCourse) return;
+    if (isPreviewMode || !user?.id || !selectedCourse) return;
     setIsSavingNote(true);
-    await saveCourseNote(user.id, selectedCourse.id, notesText);
+    setNoteSaveStatus('');
+    const saved = await saveCourseNote(user.id, selectedCourse.id, notesText);
+    setNoteSaveStatus(saved ? 'Notes saved.' : 'Notes could not be saved. Please try again.');
     setIsSavingNote(false);
   };
 
   const handleSubmitQuery = async () => {
-    if (!user?.id || !selectedCourse || !queryText.trim()) return;
+    if (isPreviewMode || !user?.id || !selectedCourse || !queryText.trim()) return;
     setIsSubmittingQuery(true);
     const success = await submitQuery(user.id, queryText, selectedCourse.id);
     setIsSubmittingQuery(false);
@@ -97,6 +110,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
       setActiveModule({ courseId, modNum, modKey });
       setExpandedModules(prev => ({ ...prev, [modNum]: true }));
       setCourseMainView('player');
+      setIsCourseNavigationOpen(false);
     }
   };
 
@@ -121,7 +135,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
       return updated;
     });
 
-    if (user?.id) {
+    if (user?.id && !isPreviewMode) {
       await updateUserProgressApi(user.id, modKey, updates);
     }
   };
@@ -139,17 +153,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
     setSelectedCourse(course);
     navigate(`${basePath}/course`);
     
-    let modToOpen = 1;
-    for (let i = 1; i <= course.totalModules; i++) {
-      const modData = progress[`${course.id}-m${i}`];
-      const prevPassed = i === 1 || progress[`${course.id}-m${i-1}`]?.passed;
-      const isUnlocked = modData?.unlocked || prevPassed;
-      
-      if (isUnlocked && !modData?.passed) {
-        modToOpen = i;
-        break;
-      }
-    }
+    const modToOpen = resumeModule(course, progress);
     setExpandedModules({ [modToOpen]: true });
     handleModuleClick(course.id, modToOpen);
   };
@@ -159,16 +163,18 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
     setSelectedCourse(null);
     setActiveModule(null);
     setCourseMainView('player');
+    setIsCourseNavigationOpen(false);
+    setIsNotesOpen(false);
   };
 
   // --- RENDER SIDEBAR ---
   const renderSidebar = () => {
     if (currentView === 'course' && selectedCourse) {
       return (
-        <div className="sidebar">
-          <div style={{ padding: '16px', borderBottom: '1px solid var(--border-color)' }}>
-            <button className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', width: '100%' }} onClick={handleGoBack}>
-              <ArrowLeft size={16} /> Back to Dashboard
+        <div className="sidebar course-sidebar">
+          <div className="course-back">
+            <button className="btn btn-outline" aria-label="Back to Dashboard" onClick={handleGoBack}>
+              <ArrowLeft size={16} /><span className="course-back-label">Back to Dashboard</span><span className="course-back-short-label">Back</span>
             </button>
           </div>
           
@@ -177,7 +183,20 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
             <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>{selectedCourse.totalModules} Modules</p>
           </div>
 
-          <div className="nav-section" style={{ flex: 1, padding: '16px 16px 80px 16px', overflowY: 'auto' }}>
+          <button
+            type="button"
+            className="course-navigation-toggle btn btn-outline"
+            aria-expanded={isCourseNavigationOpen}
+            aria-label="Course modules"
+            aria-controls="course-navigation"
+            onClick={() => setIsCourseNavigationOpen(open => !open)}
+          >
+            <span>Modules <span className="course-module-count">({selectedCourse.totalModules})</span></span><ChevronDown size={18} />
+          </button>
+          <button className="course-notes-button btn btn-outline" aria-expanded={isNotesOpen} aria-controls="course-notes" onClick={() => setIsNotesOpen(open => !open)}>
+            <FileText size={18} /> Notes
+          </button>
+          <div id="course-navigation" className={`nav-section course-navigation${isCourseNavigationOpen ? ' is-open' : ''}`}>
             {Object.keys(selectedCourse.modules || {}).map(Number).sort((a,b)=>a-b).map(modNum => {
               const modKey = `${selectedCourse.id}-m${modNum}`;
               const modData = progress[modKey] || { unlocked: modNum === 1, passed: false };
@@ -188,43 +207,20 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
               const isLocked = !modData.unlocked && modNum !== 1 && !prevPassed;
 
               return (
-                <div key={modKey} style={{ marginBottom: '12px' }}>
-                  <div 
-                    onClick={() => !isLocked && handleModuleClick(selectedCourse.id, modNum)}
-                    style={{ 
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', 
-                      padding: '12px', borderRadius: '8px',
-                      background: isActiveMod ? '#f4f4f5' : (isLocked ? '#f8fafc' : '#ffffff'),
-                      border: `1px solid ${isActiveMod ? 'var(--primary)' : 'var(--border-color)'}`,
-                      cursor: isLocked ? 'not-allowed' : 'pointer',
-                      opacity: isLocked ? 0.6 : 1,
-                      fontWeight: isActiveMod ? '600' : '500',
-                      color: isActiveMod ? 'var(--primary)' : 'var(--text-main)'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {modData.passed ? (
-                        <CheckCircle size={18} color="var(--success)" />
-                      ) : isLocked ? (
-                        <div style={{ width: '18px', height: '18px', borderRadius: '50%', border: '2px solid #cbd5e1' }} />
-                      ) : (
-                        <div style={{ width: '18px', height: '18px', borderRadius: '50%', border: '2px solid var(--primary)' }} />
-                      )}
-                      Module {modNum}
-                    </div>
-                    <div onClick={(e) => !isLocked && toggleModuleExpansion(modNum, e)} style={{ padding: '4px' }}>
+                <div key={modKey} className="module-navigation-entry">
+                  <div className={`module-navigation-row${isActiveMod ? ' is-active' : ''}`}>
+                    <button className="module-navigation-link" disabled={isLocked} aria-current={isActiveMod ? 'step' : undefined} onClick={() => handleModuleClick(selectedCourse.id, modNum)}>
+                      {modData.passed ? <CheckCircle size={18} /> : <PlayCircle size={18} />}
+                      <span>Module {modNum}<small>{modData.passed ? 'Completed' : isLocked ? 'Complete the previous module first' : 'Lecture and assessment'}</small></span>
+                    </button>
+                    <button className="module-details-toggle" disabled={isLocked} aria-label={`Module ${modNum} details`} aria-expanded={Boolean(isExpanded)} aria-controls={`details-${modKey}`} onClick={(event) => toggleModuleExpansion(modNum, event)}>
                       {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                    </div>
+                    </button>
                   </div>
-
                   {isExpanded && !isLocked && (
-                    <div style={{ padding: '8px 12px 8px 32px', borderLeft: '2px solid #e2e8f0', marginLeft: '20px', marginTop: '4px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: modData.videoWatched ? 'var(--success)' : 'var(--text-muted)', marginBottom: '8px' }}>
-                        <PlayCircle size={14} /> Video Lecture
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: modData.passed ? 'var(--success)' : 'var(--text-muted)' }}>
-                        <FileText size={14} /> Assessment
-                      </div>
+                    <div id={`details-${modKey}`} className="module-navigation-details">
+                      <span><PlayCircle size={14} /> Video lecture {modData.videoWatched && <CheckCircle size={14} />}</span>
+                      <span><FileText size={14} /> Assessment {modData.passed && <CheckCircle size={14} />}</span>
                     </div>
                   )}
                 </div>
@@ -233,13 +229,14 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
 
             <div style={{ borderTop: '1px solid var(--border-color)', margin: '16px 0', paddingTop: '16px' }}>
               {/* Course Notes button removed from here */}
-              <div 
-                className={`nav-item ${courseMainView === 'queries' ? 'active' : ''}`}
-                onClick={() => setCourseMainView('queries')}
+              <button
+                type="button"
+                className={`nav-item course-query-link ${courseMainView === 'queries' ? 'active' : ''}`}
+                onClick={() => { setCourseMainView('queries'); setIsCourseNavigationOpen(false); }}
                 style={{ padding: '12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', background: courseMainView === 'queries' ? '#f4f4f5' : 'transparent', color: courseMainView === 'queries' ? 'var(--primary)' : 'var(--text-main)', fontWeight: courseMainView === 'queries' ? '600' : '500' }}
               >
                 <AlertCircle size={18} /> Queries & Complaints
-              </div>
+              </button>
             </div>
           </div>
         </div>
@@ -287,17 +284,17 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
   const renderMainArea = () => {
     if (currentView === 'course-completed' && selectedCourse) {
       return (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px' }}>
-          <div style={{ background: '#f0fdf4', borderRadius: '16px', padding: '60px', border: '2px solid #bbf7d0', textAlign: 'center', maxWidth: '600px', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' }}>
-            <Award size={80} color="#16a34a" style={{ margin: '0 auto 24px' }} />
-            <h1 style={{ color: '#166534', margin: '0 0 16px', fontSize: '36px' }}>Congratulations!</h1>
-            <p style={{ color: '#15803d', fontSize: '20px', marginBottom: '16px', fontWeight: '500' }}>
+        <div className="course-completion">
+          <div className="course-completion-card">
+            <Award size={64} className="course-completion-icon" />
+            <h1>Congratulations!</h1>
+            <p className="course-completion-title">
               You have successfully completed {selectedCourse.title}.
             </p>
-            <p style={{ color: '#166534', marginBottom: '40px', fontSize: '16px', lineHeight: '1.6' }}>
-              Thank you for dedicating your time to this important sensitization program. Your commitment helps foster a better academic environment at IIT Kharagpur. You can always review the materials from the 'Courses Completed' tab.
+            <p className="course-completion-description">
+              All modules and assessments are complete. You can review your lectures anytime from Courses Completed.
             </p>
-            <button className="btn btn-primary" onClick={handleGoBack} style={{ padding: '16px 32px', fontSize: '18px' }}>
+            <button className="btn btn-primary" onClick={handleGoBack}>
               Return to Dashboard
             </button>
           </div>
@@ -308,18 +305,18 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
     if (currentView === 'course' && selectedCourse) {
       if (courseMainView === 'notes') {
         return (
-          <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto', width: '100%' }}>
+          <div className="course-form">
             <h1 style={{ marginBottom: '8px' }}>Course Notes</h1>
             <p style={{ color: 'var(--text-muted)', marginBottom: '32px' }}>Write your personal notes for {selectedCourse.title}. They will be saved securely to your profile.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: '60vh' }}>
               <textarea 
                 value={notesText}
-                onChange={(e) => setNotesText(e.target.value)}
+                onChange={(e) => { setNotesText(e.target.value); setNoteSaveStatus(''); }}
                 style={{ flex: 1, padding: '24px', border: '1px solid var(--border-color)', borderRadius: '12px', resize: 'none', fontFamily: 'inherit', fontSize: '16px', lineHeight: '1.6' }}
                 placeholder="Start typing your notes here..."
               />
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button className="btn btn-primary" onClick={handleSaveNote} disabled={isSavingNote} style={{ padding: '12px 32px' }}>
+                <button className="btn btn-primary" onClick={handleSaveNote} disabled={isSavingNote || isPreviewMode} style={{ padding: '12px 32px' }}>
                   {isSavingNote ? 'Saving...' : 'Save Notes'}
                 </button>
               </div>
@@ -330,9 +327,10 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
 
       if (courseMainView === 'queries') {
         return (
-          <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto', width: '100%' }}>
+          <div className="course-form">
             <h1 style={{ marginBottom: '8px' }}>Queries & Complaints</h1>
             <p style={{ color: 'var(--text-muted)', marginBottom: '32px' }}>Have a complaint or a question about {selectedCourse.title}? Submit a query below and the academic office will be notified.</p>
+            {isPreviewMode && <p className="preview-notice">Queries cannot be sent from preview mode.</p>}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: '50vh' }}>
               <textarea 
                 value={queryText}
@@ -341,7 +339,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
                 placeholder="Describe your issue or query..."
               />
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button className="btn btn-primary" onClick={handleSubmitQuery} disabled={isSubmittingQuery || !queryText.trim()} style={{ padding: '12px 32px' }}>
+                <button className="btn btn-primary" onClick={handleSubmitQuery} disabled={isPreviewMode || isSubmittingQuery || !queryText.trim()} style={{ padding: '12px 32px' }}>
                   {isSubmittingQuery ? 'Submitting...' : 'Submit Query'}
                 </button>
               </div>
@@ -354,6 +352,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
         const currentModuleInfo = courseData?.modules?.[activeModule.modNum];
         return (
           <CoursePlayer 
+            key={activeModule.modKey}
             moduleKey={activeModule.modKey} 
             moduleNum={activeModule.modNum}
             totalModules={selectedCourse.totalModules}
@@ -387,7 +386,7 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
       return (
         <div className="course-catalog">
           <h2>Browse Available Courses</h2>
-          <div className="course-cards" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))' }}>
+          <div className="course-cards">
             {coursesList.map(course => (
               <div key={course.id} className="course-card big-card" onClick={() => handleCourseStart(course)}>
                 <div className="card-image" style={{ backgroundImage: `url(${course.image})` }}></div>
@@ -459,77 +458,50 @@ export default function Dashboard({ user, onLogout, isPreviewMode = false }) {
   };
 
   return (
-    <div className="app-layout" style={{ position: 'relative' }}>
+    <div className={`app-layout${currentView === 'course' || currentView === 'course-completed' ? ' course-taking' : ''}${currentView === 'course-completed' ? ' is-course-complete' : ''}`}>
       {renderSidebar()}
-      <div className="main-area" style={{ position: 'relative', flex: 1 }}>
+      <div className="main-area">
         {renderMainArea()}
-        
-        {/* Floating Notes Toggle Button */}
         {currentView === 'course' && (
-          <button 
-            onClick={() => setIsNotesOpen(!isNotesOpen)}
-            style={{
-              position: 'absolute',
-              right: isNotesOpen ? '320px' : '0',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              background: 'var(--primary)',
-              color: 'white',
-              border: 'none',
-              padding: '16px 8px',
-              borderTopLeftRadius: '8px',
-              borderBottomLeftRadius: '8px',
-              cursor: 'pointer',
-              zIndex: 50,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-              transition: 'right 0.3s ease',
-              boxShadow: '-2px 0 8px rgba(0,0,0,0.1)'
-            }}
+          <button
+            type="button"
+            className={`notes-toggle${isNotesOpen ? ' is-open' : ''}`}
+            aria-expanded={isNotesOpen}
+            aria-controls="course-notes"
+            onClick={() => setIsNotesOpen(open => !open)}
           >
             <FileText size={20} />
-            <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontWeight: '600', letterSpacing: '2px' }}>NOTES</span>
+            <span>NOTES</span>
           </button>
         )}
       </div>
 
-      {/* Right Side Notes Panel */}
-      <div style={{
-        width: '320px',
-        background: 'white',
-        borderLeft: '1px solid var(--border-color)',
-        display: 'flex',
-        flexDirection: 'column',
-        position: 'absolute',
-        right: isNotesOpen ? '0' : '-320px',
-        top: 0,
-        bottom: 0,
-        transition: 'right 0.3s ease',
-        zIndex: 40,
-        boxShadow: isNotesOpen ? '-4px 0 16px rgba(0,0,0,0.05)' : 'none'
-      }}>
-        <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}><FileText size={18} /> My Notes</h3>
-          <button onClick={() => setIsNotesOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
-            <span style={{ fontSize: '20px', fontWeight: 'bold' }}>&times;</span>
-          </button>
-        </div>
-        <div style={{ flex: 1, padding: '16px', display: 'flex', flexDirection: 'column' }}>
-          <textarea 
-            value={notesText}
-            onChange={(e) => setNotesText(e.target.value)}
-            style={{ flex: 1, width: '100%', padding: '16px', border: '1px solid var(--border-color)', borderRadius: '8px', resize: 'none', fontFamily: 'inherit', fontSize: '14px', lineHeight: '1.6', background: '#fafafa' }}
-            placeholder="Write your notes here while watching the lecture..."
-          />
-        </div>
-        <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)' }}>
-          <button className="btn btn-primary" onClick={handleSaveNote} disabled={isSavingNote} style={{ width: '100%', justifyContent: 'center' }}>
-            {isSavingNote ? 'Saving...' : 'Save Notes'}
-          </button>
-        </div>
-      </div>
+      {isNotesOpen && (
+        <>
+          <button className="notes-backdrop" aria-label="Close course notes" onClick={() => setIsNotesOpen(false)} />
+          <aside id="course-notes" className="notes-panel" aria-label="Course notes">
+            <div className="notes-panel-header">
+              <h3><FileText size={18} /> My Notes</h3>
+              <button className="notes-close" aria-label="Close notes" onClick={() => setIsNotesOpen(false)}>&times;</button>
+            </div>
+            <div className="notes-panel-body">
+              {isPreviewMode && <p className="preview-notice">Notes are temporary in preview mode.</p>}
+              <textarea
+                value={notesText}
+                onChange={(e) => { setNotesText(e.target.value); setNoteSaveStatus(''); }}
+                placeholder="Write your notes here while watching the lecture..."
+                aria-label="Lecture notes"
+              />
+            </div>
+            <div className="notes-panel-footer">
+              {noteSaveStatus && <p className="note-save-status" role="status">{noteSaveStatus}</p>}
+              <button className="btn btn-primary" onClick={handleSaveNote} disabled={isSavingNote || isPreviewMode}>
+                {isSavingNote ? 'Saving...' : 'Save Notes'}
+              </button>
+            </div>
+          </aside>
+        </>
+      )}
     </div>
   );
 }

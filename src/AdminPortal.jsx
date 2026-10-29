@@ -604,7 +604,7 @@ export default function AdminPortal({ user, onLogout, onPreviewFaculty }) {
                           </small>
                         </div>
 
-                        <div className="input-group" style={{ width: '200px' }}>
+                        <div className="input-group passing-threshold-group">
                           <label>Passing Threshold</label>
                           <select 
                             value={editingModule.passingThreshold || 80}

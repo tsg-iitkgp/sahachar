@@ -115,13 +115,13 @@ export default function CoursePlayer({
 
   // Quiz State
 
-  const [quizState, setQuizState] = useState('idle'); // 'idle' | 'taking' | 'passed' | 'failed'
+  const [quizState, setQuizState] = useState(moduleData?.passed ? 'passed' : 'idle');
 
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
 
   const [answers, setAnswers] = useState(Array(activeQuestions.length).fill(null));
 
-  const [score, setScore] = useState(0);
+  const [score, setScore] = useState(moduleData?.passed ? null : 0);
 
 
 
@@ -140,9 +140,14 @@ export default function CoursePlayer({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [ccEnabled, setCcEnabled] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPlayerReady, setIsPlayerReady] = useState(false);
+  const [playerError, setPlayerError] = useState(false);
+  const [playerRetry, setPlayerRetry] = useState(0);
 
   const intervalRef = useRef(null);
   const containerRef = useRef(null);
+  const courseRef = useRef(null);
+  const assessmentRef = useRef(null);
 
   const playerRef = useRef(null);
 
@@ -150,31 +155,18 @@ export default function CoursePlayer({
 
 
 
-  // Reset state on module switch
+  // Dashboard keys this component by module so each lecture starts with its own state.
+  useEffect(() => () => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  }, []);
 
   useEffect(() => {
+    courseRef.current?.scrollIntoView({ block: 'start' });
+  }, [moduleKey]);
 
-    setQuizState(moduleData?.passed ? 'passed' : 'idle');
-
-    setCurrentQuestionIdx(0);
-
-    setAnswers(Array(activeQuestions.length).fill(null));
-
-    setScore(moduleData?.passed ? activeQuestions.length : 0);
-
-    maxTimeRef.current = moduleData?.maxTimeWatched || 0;
-
-
-
-    return () => {
-
-      if (intervalRef.current) clearInterval(intervalRef.current);
-
-    };
-
-  }, [moduleKey, moduleData?.passed, activeQuestions.length]);
-
-
+  useEffect(() => {
+    if (quizState !== 'idle') assessmentRef.current?.scrollIntoView({ block: 'start' });
+  }, [quizState, currentQuestionIdx]);
 
   useEffect(() => {
     maxTimeRef.current = moduleData?.maxTimeWatched || 0;
@@ -182,7 +174,7 @@ export default function CoursePlayer({
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      setIsFullscreen(Boolean(containerRef.current && document.fullscreenElement === containerRef.current));
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -205,6 +197,8 @@ export default function CoursePlayer({
   const onPlayerReady = (event) => {
 
     playerRef.current = event.target;
+    setIsPlayerReady(true);
+    setPlayerError(false);
 
     try {
 
@@ -257,6 +251,7 @@ export default function CoursePlayer({
     if (event.data === YouTube.PlayerState.PLAYING) {
 
       setIsPlaying(true);
+      setDuration(player.getDuration() || moduleInfo?.durationSeconds || 0);
 
       intervalRef.current = setInterval(() => {
 
@@ -468,7 +463,7 @@ export default function CoursePlayer({
 
       // Record attempt into database/attempts log
 
-      recordQuizAttempt({
+      if (!isPreviewMode) recordQuizAttempt({
 
         userId: userId || '123',
 
@@ -518,22 +513,16 @@ export default function CoursePlayer({
 
     updateProgress(moduleKey, { videoWatched: false, maxTimeWatched: 0, passed: false });
 
-    if (playerRef.current) {
-
-      playerRef.current.seekTo(0);
-
-      setCurrentTime(0);
-
-      playerRef.current.playVideo();
-
-    }
-
+    playerRef.current = null;
+    setCurrentTime(0);
+    setIsPlayerReady(false);
+    setPlayerError(false);
   };
 
 
-
   const startQuiz = () => {
-
+    playerRef.current?.pauseVideo();
+    if (intervalRef.current) clearInterval(intervalRef.current);
     setQuizState('taking');
 
   };
@@ -556,467 +545,124 @@ export default function CoursePlayer({
 
 
 
-  // --- RENDER HELPERS ---
-
-  const renderQuizContent = () => {
-
-    if (quizState === 'taking') {
-
-      const question = activeQuestions[currentQuestionIdx];
-
-      const hasAnsweredCurrent = answers[currentQuestionIdx] !== null;
-
-
-
-      return (
-
-        <div style={{ background: '#fff', borderRadius: '12px', padding: '40px', border: '1px solid var(--border-color)', minHeight: '400px', display: 'flex', flexDirection: 'column' }}>
-
-          <div style={{ color: 'var(--text-muted)', fontSize: '14px', marginBottom: '24px', fontWeight: '500' }}>
-
-            Question {currentQuestionIdx + 1} of {activeQuestions.length} &bull; Passing Score: {passingThreshold}%
-
-          </div>
-
-          
-
-          <h3 style={{ fontSize: '20px', marginBottom: '32px', color: 'var(--text-main)', lineHeight: '1.4' }}>
-
-            {question.question}
-
-          </h3>
-
-          
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-
-            {question.options.map((opt, oIdx) => (
-
-              <label 
-
-                key={oIdx} 
-
-                className={`quiz-option ${answers[currentQuestionIdx] === oIdx ? 'selected' : ''}`}
-
-                style={{ padding: '16px 20px', fontSize: '15px' }}
-
-              >
-
-                <input 
-
-                  type="radio" 
-
-                  name={`q-${currentQuestionIdx}`}
-
-                  checked={answers[currentQuestionIdx] === oIdx}
-
-                  onChange={() => handleAnswerSelect(oIdx)}
-
-                />
-
-                {opt}
-
-              </label>
-
-            ))}
-
-          </div>
-
-
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '32px', paddingTop: '24px', borderTop: '1px solid var(--border-color)' }}>
-
-            <button 
-
-              className="btn btn-primary" 
-
-              disabled={!hasAnsweredCurrent}
-
-              onClick={handleNextQuestion}
-
-              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px' }}
-
-            >
-
-              {currentQuestionIdx === activeQuestions.length - 1 ? 'Submit Assessment' : 'Next Question'}
-
-              {currentQuestionIdx !== activeQuestions.length - 1 && <ArrowRight size={18} />}
-
-            </button>
-
-          </div>
-
-        </div>
-
-      );
-
-    }
-
-
-
-    if (quizState === 'passed') {
-
-      const percentage = Math.round((score / activeQuestions.length) * 100);
-
-      return (
-
-        <div style={{ background: '#f0fdf4', borderRadius: '12px', padding: '60px 40px', border: '1px solid #bbf7d0', textAlign: 'center' }}>
-
-          <CheckCircle size={64} color="#16a34a" style={{ margin: '0 auto 24px' }} />
-
-          <h2 style={{ color: '#166534', margin: '0 0 16px', fontSize: '28px' }}>Assessment Passed!</h2>
-
-          <p style={{ color: '#15803d', fontSize: '18px', marginBottom: '32px', fontWeight: '500' }}>
-
-            You scored {percentage}% ({score}/{activeQuestions.length}).
-
-          </p>
-
-          <p style={{ color: '#166534', marginBottom: '40px', fontSize: '16px' }}>
-
-            You have successfully mastered this module. You may now continue to the next section.
-
-          </p>
-
-          
-
-          <button 
-
-            style={{ 
-
-              padding: '16px 40px', fontSize: '18px', borderRadius: '4px', 
-
-              background: 'var(--primary)', color: '#fff', border: 'none', 
-
-              fontWeight: '600', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px',
-
-              transition: 'background 0.2s'
-
-            }} 
-
-            onMouseOver={(e) => { e.currentTarget.style.background = 'var(--primary-hover)'; }}
-
-            onMouseOut={(e) => { e.currentTarget.style.background = 'var(--primary)'; }}
-
-            onClick={onNextModule}
-
-          >
-            {moduleNum < totalModules ? `Continue to Module ${moduleNum + 1}` : "Return to Dashboard"} <ArrowRight size={20} />
-          </button>
-
-        </div>
-
-      );
-
-    }
-
-
-
-    if (quizState === 'failed') {
-
-      const percentage = Math.round((score / activeQuestions.length) * 100);
-
-      return (
-
-        <div style={{ background: '#fef2f2', borderRadius: '12px', padding: '60px 40px', border: '1px solid #fecaca', textAlign: 'center' }}>
-
-          <AlertCircle size={64} color="#dc2626" style={{ margin: '0 auto 24px' }} />
-
-          <h2 style={{ color: '#991b1b', margin: '0 0 16px' }}>Assessment Failed</h2>
-
-          <p style={{ color: '#b91c1c', fontSize: '18px', marginBottom: '16px' }}>
-
-            You scored {percentage}% ({score}/{activeQuestions.length}).
-
-          </p>
-
-          <p style={{ color: '#991b1b', marginBottom: '32px', maxWidth: '400px', margin: '0 auto 32px' }}>
-
-            A minimum score of {passingThreshold}% is required to pass. You must re-watch the video lecture completely before attempting the quiz again.
-
-          </p>
-
-          <button className="btn btn-danger" onClick={handleReattempt} style={{ padding: '12px 32px', fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px', margin: '0 auto' }}>
-
-            <RotateCcw size={18} /> Reattempt Module
-
-          </button>
-
-        </div>
-
-      );
-
-    }
-
-
-
-    return null;
-
-  };
-
-
-
   const youtubeOpts = React.useMemo(() => ({
     width: '100%',
     height: '100%',
-    playerVars: { controls: 0, disablekb: 1, rel: 0, modestbranding: 1, cc_load_policy: 1 }
+    playerVars: { controls: 0, disablekb: 1, rel: 0, playsinline: 1, cc_load_policy: 1 }
   }), []);
 
+  const retryPlayer = () => {
+    playerRef.current = null;
+    setIsPlayerReady(false);
+    setPlayerError(false);
+    setPlayerRetry(value => value + 1);
+  };
+
   return (
-
-    <div>
-
-      <div className="content-header">
-
+    <section className="course-player" ref={courseRef}>
+      <header className="content-header course-player-header">
         <div>
-
-          <h1>Module {moduleNum}: {moduleInfo?.title || ''}</h1>
-
+          <p className="course-module-label">Module {moduleNum} of {totalModules}</p>
+          <h1>{moduleInfo?.title || `Module ${moduleNum}`}</h1>
           <p>{courseTitle}</p>
-
         </div>
+      </header>
 
-      </div>
-
-
-
-      {moduleData?.passed && (
-
-        <div style={{ padding: '16px', background: '#f0fdf4', borderLeft: '4px solid #16a34a', color: '#166534', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-
-          <CheckCircle size={20} />
-
-          <strong>Module Completed!</strong> You have successfully passed this module. You can re-watch the lecture anytime.
-
-        </div>
-
-      )}
-
-
-
-      {(quizState === 'idle' || quizState === 'passed') && (
-
+      {quizState === 'idle' && (
         <>
-
-          {/* Video with Custom Controls */}
-
-          <div ref={containerRef} style={{ background: '#0f172a', border: isFullscreen ? 'none' : '1px solid var(--border-color)', borderRadius: isFullscreen ? '0' : '4px', overflow: 'hidden', margin: isFullscreen ? '0' : '0 auto 32px auto', width: '100%', maxWidth: isFullscreen ? '100%' : 'calc(70vh * 16 / 9)', height: isFullscreen ? '100vh' : 'auto', display: 'flex', flexDirection: 'column' }}>
-
-            
-
-            <div className="video-wrapper" style={{ paddingBottom: isFullscreen ? '0' : '56.25%', flex: isFullscreen ? 1 : 'none', minHeight: 0 }}>
-
+          {moduleData?.passed && <p className="module-completed-note"><CheckCircle size={20} /> Assessment complete. You can review this lecture.</p>}
+          <div ref={containerRef} className="video-shell">
+            <div className="video-stage">
               <YouTube
-
+                key={`${moduleKey}-${playerRetry}`}
                 videoId={currentVideoId}
-
                 onReady={onPlayerReady}
-
                 onStateChange={onStateChange}
-
                 onEnd={onEnd}
-
+                onError={() => { setPlayerError(true); setIsPlayerReady(false); }}
                 className="youtube-container"
-
                 iframeClassName="youtube-iframe"
-
                 opts={youtubeOpts}
-
               />
-
+              {!isPlayerReady && (
+                <div className="video-status" role="status">
+                  {playerError ? <><p>The lecture could not be loaded.</p><button className="btn btn-outline" onClick={retryPlayer}>Retry video</button></> : <p>Loading lecture…</p>}
+                </div>
+              )}
             </div>
-
-            
-
-            {/* Read-Only Playbar */}
-
-            <div style={{ display: 'flex', alignItems: 'center', padding: '12px 20px', gap: '16px', color: '#fff', flexWrap: 'wrap' }}>
-
-              <button 
-
-                onClick={togglePlayPause}
-
-                style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-
-              >
-
-                {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
-
+            <div className="player-timeline">
+              <span>{formatTime(currentTime)}</span>
+              <div className="player-progress" role="progressbar" aria-label="Lecture progress" aria-valuemin={0} aria-valuemax={duration || 1} aria-valuenow={Math.min(currentTime, duration || 1)}>
+                <div style={{ width: `${duration > 0 ? Math.min(currentTime / duration * 100, 100) : 0}%` }} />
+              </div>
+              <span>{formatTime(duration)}</span>
+            </div>
+            <div className="player-controls">
+              <button className="player-control" onClick={togglePlayPause} disabled={!isPlayerReady} aria-label={isPlaying ? 'Pause lecture' : 'Play lecture'} title={isPlaying ? 'Pause' : 'Play'}>
+                {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
               </button>
-
-              
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-
-                <button onClick={toggleMute} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '4px', display: 'flex' }}>
-
-                  {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
-
+              <div className="player-volume">
+                <button className="player-control" onClick={toggleMute} disabled={!isPlayerReady} aria-label={isMuted ? 'Unmute lecture' : 'Mute lecture'}>
+                  {isMuted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
                 </button>
-
-                <input 
-
-                  type="range" 
-
-                  min="0" 
-
-                  max="100" 
-
-                  value={isMuted ? 0 : volume} 
-
-                  onChange={handleVolumeChange} 
-
-                  style={{ width: '60px', accentColor: '#fff', cursor: 'pointer' }}
-
-                />
-
+                <input aria-label="Lecture volume" type="range" min="0" max="100" value={isMuted ? 0 : volume} onChange={handleVolumeChange} disabled={!isPlayerReady} />
               </div>
-
-
-
-              <button onClick={toggleCC} style={{ background: ccEnabled ? '#3b82f6' : 'transparent', border: '1px solid #475569', borderRadius: '4px', color: '#fff', cursor: 'pointer', padding: '2px 8px', fontSize: '12px', fontWeight: 'bold', marginLeft: 'auto' }}>
-                CC
-              </button>
-
-              <div style={{ fontSize: '13px', fontFamily: 'monospace', color: '#94a3b8', marginLeft: '12px' }}>
-
-                {formatTime(currentTime)}
-
-              </div>
-
-              
-
-              <div style={{ flex: 1, minWidth: '100px', height: '6px', background: '#334155', borderRadius: '3px', overflow: 'hidden' }}>
-
-                <div 
-
-                  style={{ 
-
-                    height: '100%', 
-
-                    background: '#fff', 
-
-                    width: `${duration > 0 ? Math.min((currentTime / duration) * 100, 100) : 0}%`,
-
-                    transition: 'width 0.2s linear'
-
-                  }} 
-
-                />
-
-              </div>
-
-              
-
-              <div style={{ fontSize: '13px', fontFamily: 'monospace', color: '#94a3b8' }}>
-
-                {formatTime(duration)}
-
-              </div>
-
-
-
-              <select 
-
-                value={playbackRate} 
-
-                onChange={handleSpeedChange}
-
-                style={{ 
-
-                  background: '#1e293b', color: '#fff', border: '1px solid #334155', 
-
-                  borderRadius: '4px', padding: '4px 8px', fontSize: '13px', cursor: 'pointer' 
-
-                }}
-
-              >
-
-                <option value={0.5}>0.5x</option>
-
-                <option value={1}>1.0x</option>
-
-                <option value={1.5}>1.5x</option>
-
-                <option value={2}>2.0x</option>
-
+              <button className="player-control" onClick={toggleCC} disabled={!isPlayerReady} aria-label="Closed captions" aria-pressed={ccEnabled}>CC</button>
+              <select className="player-speed" aria-label="Playback speed" value={playbackRate} onChange={handleSpeedChange} disabled={!isPlayerReady}>
+                <option value={0.5}>0.5x</option><option value={1}>1.0x</option><option value={1.5}>1.5x</option><option value={2}>2.0x</option>
               </select>
-
-              <button onClick={toggleFullscreen} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '4px', marginLeft: '8px', display: 'flex' }}>
-                {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+              <button className="player-control" onClick={toggleFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>
+                {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
               </button>
-
             </div>
-
           </div>
-
-
-
-          {isPreviewMode && !moduleData?.passed && quizState === 'idle' && !moduleData?.videoWatched && (
-
-            <div style={{ padding: '0 0 24px 0', display: 'flex', justifyContent: 'flex-end' }}>
-
-              <button 
-
-                className="btn btn-outline" 
-
-                onClick={onEnd}
-
-                style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-main)', borderColor: 'var(--border-color)', fontWeight: '600' }}
-
-              >
-
-                <Play size={16} /> Skip Video (Admin Preview)
-
-              </button>
-
-            </div>
-
+          {isPreviewMode && !moduleData?.passed && !moduleData?.videoWatched && (
+            <div className="course-preview-actions"><button className="btn btn-outline" onClick={onEnd}><Play size={16} /> Skip Video (Admin Preview)</button></div>
           )}
-
-          
-
           {moduleData?.videoWatched && !moduleData?.passed && (
-
-            <div style={{ padding: '16px 20px', background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderLeft: '4px solid var(--primary)', color: 'var(--text-main)', borderRadius: '4px', marginBottom: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-
-                <CheckCircle size={20} />
-
-                <strong>Successfully completed the video!</strong> Take the test to continue.
-
-              </div>
-
-              <button className="btn btn-primary" onClick={startQuiz}>
-
-                Take Test
-
-              </button>
-
+            <div className="assessment-ready">
+              <div><CheckCircle size={22} /><p><strong>Lecture complete</strong><span>Take the assessment to continue.</span></p></div>
+              <button className="btn btn-primary" onClick={startQuiz}>Take Test <ArrowRight size={18} /></button>
             </div>
-
           )}
-
         </>
-
       )}
 
-
-
-      {quizState !== 'idle' && (
-
-        <div style={{ marginTop: '24px' }}>
-
-          {renderQuizContent()}
-
-        </div>
-
+      {quizState === 'taking' && (
+        <section ref={assessmentRef} className="assessment-card" aria-label="Module assessment">
+          <p className="assessment-meta">Question {currentQuestionIdx + 1} of {activeQuestions.length}<span>Passing score: {passingThreshold}%</span></p>
+          <h2 className="assessment-question" id="assessment-question">{activeQuestions[currentQuestionIdx].question}</h2>
+          <div className="assessment-options" role="radiogroup" aria-labelledby="assessment-question">
+            {activeQuestions[currentQuestionIdx].options.map((option, index) => (
+              <label key={index} className={`quiz-option ${answers[currentQuestionIdx] === index ? 'selected' : ''}`}>
+                <input type="radio" name={`q-${currentQuestionIdx}`} checked={answers[currentQuestionIdx] === index} onChange={() => handleAnswerSelect(index)} />
+                <span>{option}</span>
+              </label>
+            ))}
+          </div>
+          <footer className="assessment-actions">
+            <button className="btn btn-primary" disabled={answers[currentQuestionIdx] === null} onClick={handleNextQuestion}>
+              {currentQuestionIdx === activeQuestions.length - 1 ? 'Submit Assessment' : 'Next Question'}
+              {currentQuestionIdx !== activeQuestions.length - 1 && <ArrowRight size={18} />}
+            </button>
+          </footer>
+        </section>
       )}
 
-    </div>
-
+      {(quizState === 'passed' || quizState === 'failed') && (
+        <section ref={assessmentRef} className={`assessment-result ${quizState === 'passed' ? 'is-passed' : 'is-failed'}`} aria-live="polite">
+          {quizState === 'passed' ? <CheckCircle size={56} /> : <AlertCircle size={56} />}
+          <h2>{quizState === 'passed' ? 'Assessment Passed!' : 'Assessment Failed'}</h2>
+          <p className="assessment-score">{score === null ? 'You have already passed this assessment.' : `You scored ${Math.round(score / activeQuestions.length * 100)}% (${score}/${activeQuestions.length}).`}</p>
+          <p>{quizState === 'passed' ? 'You can now continue to the next section.' : `A minimum score of ${passingThreshold}% is required. Review the full lecture before trying again.`}</p>
+          <div className="assessment-result-actions">
+            {quizState === 'passed' ? <>
+              <button className="btn btn-primary" onClick={onNextModule}>{moduleNum < totalModules ? `Continue to Module ${moduleNum + 1}` : 'Finish course'} <ArrowRight size={18} /></button>
+              <button className="btn btn-outline" onClick={() => { setIsPlayerReady(false); setQuizState('idle'); }}>Review lecture</button>
+            </> : <button className="btn btn-danger" onClick={handleReattempt}><RotateCcw size={18} /> Reattempt Module</button>}
+          </div>
+        </section>
+      )}
+    </section>
   );
-
 }
-

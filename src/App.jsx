@@ -6,6 +6,9 @@ import AdminPortal from './AdminPortal';
 import { ArrowLeft, Shield } from 'lucide-react';
 import { enrollFacultyOnLogin } from './services/api';
 import './index.css';
+import './course.css';
+
+const PREVIEW_FACULTY = { id: 'preview-faculty', name: 'Preview Mode (Dr. Faculty)', department: 'Academic Faculty Preview', role: 'faculty' };
 
 function MainApp() {
   const navigate = useNavigate();
@@ -49,29 +52,29 @@ function MainApp() {
       <Route path="/admin/*" element={
         user.role === 'admin' ? (
           isAdminPreviewingFaculty ? (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+            <div className="admin-preview-layout">
               <div className="admin-preview-banner">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className="admin-preview-message">
                   <Shield size={16} />
                   <strong>Administrator Faculty Preview Mode</strong> &mdash; Testing course lecture & assessment experience.
                 </div>
                 <button 
                   className="btn btn-outline btn-sm" 
-                  onClick={() => setIsAdminPreviewingFaculty(false)}
+                  onClick={() => { setIsAdminPreviewingFaculty(false); navigate('/admin'); }}
                   style={{ background: '#fff', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   <ArrowLeft size={14} /> Exit Preview & Return to Admin Portal
                 </button>
               </div>
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <Dashboard user={{ id: 'preview-faculty', name: 'Preview Mode (Dr. Faculty)', department: 'Academic Faculty Preview', role: 'faculty' }} onLogout={handleLogout} isPreviewMode={true} />
+              <div className="admin-preview-content">
+                <Dashboard user={PREVIEW_FACULTY} onLogout={handleLogout} isPreviewMode={true} />
               </div>
             </div>
           ) : (
             <AdminPortal 
               user={user} 
               onLogout={handleLogout} 
-              onPreviewFaculty={() => setIsAdminPreviewingFaculty(true)} 
+              onPreviewFaculty={() => { navigate('/admin'); setIsAdminPreviewingFaculty(true); }}
             />
           )
         ) : <Navigate to="/dashboard" replace />
